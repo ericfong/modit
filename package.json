@@ -1,0 +1,26 @@
+{
+  "name": "modit",
+  "version": "0.0.0",
+  "description": "Offline-first Simplest Model-only System for any ReactJs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ericfong/modit.git"
+  },
+  "keywords": [
+    "Offline",
+    "Simple",
+    "Model",
+    "System",
+    "ReactJs"
+  ],
+  "author": "Eric Fong <ericff@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ericfong/modit/issues"
+  },
+  "homepage": "https://github.com/ericfong/modit"
+}
