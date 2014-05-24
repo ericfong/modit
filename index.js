@@ -4,104 +4,144 @@ var util = require("util");
 var _ = require('underscore');
 var Wait = require('wait-async');
 
+var Promise = require('es6-promise').Promise;
 
-function Table(data) {
+
+// both Action && Store
+function Table(name, funcs) {
+    this.name = name;
     this.data = {};
 
     // ops for flush to server or other local database
     // this should be store in local storage if you want the ops survive over client restart
-    this.ops = [];
+    //this.ops = [];
 
     // ops for emit as local events
-    this.opsTmp = [];
+    //this.opsTmp = [];
 
-    this._isBooted = false;
-    this._isSubmitQueued = false;
-    this._isSubmitting = false;
-    this._isSubmitAgain = false;
-    this._debounceTime = 10;
+    this._isSaveQueued = false;
+    this._isSaving = false;
+    this._isSaveAgain = false;
+    this._saveDebounce = 800;
 
-    _.extend(this, data);
+    _.extend(this, funcs);
 
-    // use this to make it have similar effect as flux from facebook
-    this._doSubmitDelay = _.debounce(this._doSubmit, this._debounceTime);
+    this._saveQueue = _.debounce(this._saveLoop, this._saveDebounce);
 
     Table.instances.push(this);
+
+    if (!Table.dispatcher)
+        throw new Error('Please setup singleton flux-dispatcher and set it to Table.dispatcher');
+    Table.dispatcher.register(this._onDispatch.bind(this));
 }
+
+// Setup dispatcher like this
+//Table.dispatcher = Dispatcher;
+
 Table.instances = [];
+
 util.inherits(Table, EventEmitter);
 _.extend(Table.prototype, {
 
-    boot: function(cb){
-        this.bootLocal(function(){
-            this.bootRemote(function(){
-                this._isBooted = true;
-                cb();
-            }.bind(this));
-        }.bind(this));
+    _onDispatch: function(action){
+        if (action.table != this.name)
+            return;
+        console.log(action);
+        var refs = this._walk(action.p);
+        var obj = refs.obj;
+        var key = refs.key;
+        if (action.na !== undefined) {
+            obj[key] += action.na;
+
+
+        } else if (action.li !== undefined && action.ld !== undefined) {
+            obj[key] = action.li;
+        } else if (action.li !== undefined) {
+            obj.splice(key, 0, action.li);
+        } else if (action.ld !== undefined) {
+            obj.splice(key, 1);
+        } else if (action.lm !== undefined) {
+            var arr = obj.splice(key, 1);
+            obj.splice(action.lm, 0, arr[0]);
+
+
+        } else if (action.oi !== undefined) {
+            obj[key] = action.oi;
+
+        } else if (action.od !== undefined) {
+            delete obj[key];
+        }
+
+        this.emit('modified', action);
+
+        // saving should be background process
+        this._isSaveQueued = true;
+        this._saveQueue();
+    },
+    _walk: function(path){
+        var obj = this.data;
+        var key = path[0];
+
+        if (path.length >= 2) {
+            for (var i = 0, ii = path.length - 1; i < ii; i++) {
+                var nextObj = obj[key];
+                var nextKey = path[i + 1];
+
+                if (!nextObj) {
+                    // for easy to use
+                    if (i < 1) {
+                        nextObj = obj[key] = typeof nextKey == 'number' ? [] : {};
+                    } else {
+                        console.error('bad path', this, obj, key);
+                        throw new Error('bad path '+path.join('/'));
+                    }
+                }
+
+                obj = nextObj;
+                key = nextKey;
+            }
+        }
+        return {obj:obj, key:key};
     },
 
-    _submit: function(op) {
-        console.log(op, this.data[op.p[0]]);
-        this.opsTmp.push(op);
-        this.ops.push(op);
-        this._isSubmitQueued = true;
-        this._doSubmitDelay();
-    },
-
-    _submits: function(ops) {
-        console.log(ops);
-        this.opsTmp = this.opsTmp.concat(ops);
-        this.ops = this.ops.concat(ops);
-        this._isSubmitQueued = true;
-        this._doSubmitDelay();
-    },
-
-    _doSubmit: function(){
-        //if (!this._isBooted) return;
-        if (this._isSubmitting) {
-            this._isSubmitAgain = true;
+    _saveLoop: function(){
+        if (this._isSaving) {
+            this._isSaveAgain = true;
             return;
         }
-        this._isSubmitQueued = false;
-        this._isSubmitting = true;
+        this._isSaveQueued = false;
+        this._isSaving = true;
         this._isSubmitAgain = false;
 
-        var wait = new Wait();
-        this.submitLocal(this.opsTmp, wait());
-        this.submitRemote(this.opsTmp, wait());
-        // also wait for a list of async functions?
-        wait.then(function(){
-            this._isSubmitting = false;
-            if (this._isSubmitAgain) {
-                this._doSubmit();
+        this.doSave(function(){
+            this._isSaving = false;
+            if (this._isSaveAgain) {
+                this._doSave();
             } else {
-                this.emit('modified', this.opsTmp);
-                this.opsTmp = [];
+                this.emit('saved');
             }
         }.bind(this));
     },
 
     // for override
-    bootLocal: function(cb){
+    doBoot: function(cb){
+        cb();
+    },
+    doSave: function(cb){
         // store data into localStorage
         cb();
     },
-    bootRemote: function(cb){
-        // ajax post to server
-        cb();
-    },
-    submitLocal: function(ops, cb){
-        // store data into localStorage
-        cb();
-    },
-    submitRemote: function(ops, cb){
-        // ajax post to server
-        cb();
+
+    _submit: function(op) {
+        op.table = this.name;
+        Table.dispatcher.dispatch(op);
     },
 
     // Object
     set: traverse(function(path, obj, key, value){
+        if (obj[key] == value)
+            return;
+
         var op = {p:path};
         if (Array.isArray(obj)) {
             op.li = value;
@@ -117,8 +157,6 @@ _.extend(Table.prototype, {
             throw new Error('bad path');
         }
         this._submit(op);
-
-        obj[key] = value;
     }, 1),
 
     del: traverse(_del, 0),
@@ -134,16 +172,12 @@ _.extend(Table.prototype, {
             throw new Error('bad path');
         }
         this._submit(op);
-
-        var arr = obj.splice(key, 1);
-        obj.splice(to, 0, arr[0]);
     }, 1),
 
     // Number
     inc: traverse(function(path, obj, key, value){
         var op = {p:path, na:value};
         this._submit(op);
-        obj[key] += value;
     }, 1),
 
 
@@ -197,12 +231,10 @@ function _del(path, obj, key){
         op.ld = obj[key];
 
         ret = obj[key];
-        obj.splice(key, 1);
     } else if (typeof obj === 'object') {
         op.od = obj[key];
 
         ret = obj[key];
-        delete obj[key];
     } else {
         throw new Error('bad path');
     }
@@ -211,17 +243,15 @@ function _del(path, obj, key){
 }
 
 function _remove(path, obj, key, len){
-    var ops = [];
     var pos = path.pop();
     for (var i=pos; i<pos+len; i++) {
-      ops.push({
+      this._submit({
         p: path.concat(pos),
         ld: obj[i]
       });
     }
-    this._submits(ops);
 
-    return obj.splice(pos, len);
+    return [].concat(obj).splice(pos, len);
 }
 
 function _insert(path, obj, key, value){
@@ -232,8 +262,6 @@ function _insert(path, obj, key, value){
         throw new Error('bad path');
     }
     this._submit(op);
-
-    obj.splice(key, 0, value);
 }
 
 function traverse(func, requiredArgsCount) {
@@ -275,12 +303,16 @@ function traverse(func, requiredArgsCount) {
 }
 Table.traverse = traverse;
 
+
 Table.boot = function(cb){
     var wait = new Wait();
     this.instances.forEach(function(table){
-        table.boot(wait());
+        table.doBoot(wait());
     });
-    wait.then(cb);
+    wait.then(function(){
+        Table.isBooted = true;
+        if (cb) cb();
+    });
 }
 
 module.exports = Table;

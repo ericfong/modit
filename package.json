@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/ericfong/modit",
   "dependencies": {
+    "es6-promise": "^1.0.0",
     "underscore": "^1.6.0",
     "wait-async": "^1.0.1"
   }
