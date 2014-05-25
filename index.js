@@ -32,7 +32,7 @@ function Table(name, funcs) {
 
     if (!Table.dispatcher)
         throw new Error('Please setup singleton flux-dispatcher and set it to Table.dispatcher');
-    Table.dispatcher.register(this._onDispatch.bind(this));
+    this.dispatcherIndex = Table.dispatcher.register(this._onDispatch.bind(this));
 }
 
 // Setup dispatcher like this
